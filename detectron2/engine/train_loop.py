@@ -7,6 +7,9 @@ import numpy as np
 import time
 import weakref
 import torch
+import os
+from matplotlib import pyplot
+from reliability.Fitters import Fit_Weibull_3P
 
 import detectron2.utils.comm as comm
 from detectron2.utils.events import EventStorage
@@ -35,11 +38,13 @@ class HookBase:
             hook.before_step()
             trainer.run_step()
             hook.after_step()
+        iter += 1
         hook.after_train()
 
     Notes:
-        1. In the hook method, users can access `self.trainer` to access more
-           properties about the context (e.g., current iteration).
+        1. In the hook method, users can access ``self.trainer`` to access more
+           properties about the context (e.g., model, current iteration, or config
+           if using :class:`DefaultTrainer`).
 
         2. A hook that does something in :meth:`before_step` can often be
            implemented equivalently in :meth:`after_step`.
@@ -52,8 +57,8 @@ class HookBase:
            function properly.
 
     Attributes:
-        trainer: A weak reference to the trainer object. Set by the trainer when the hook is
-            registered.
+        trainer (TrainerBase): A weak reference to the trainer object. Set by the trainer
+            when the hook is registered.
     """
 
     def before_train(self):
@@ -136,9 +141,15 @@ class TrainerBase:
             try:
                 self.before_train()
                 for self.iter in range(start_iter, max_iter):
+                    if self.cfg.OWOD.SKIP_TRAINING_WHILE_EVAL:
+                        continue
                     self.before_step()
                     self.run_step()
                     self.after_step()
+                # self.iter == max_iter can be used by `after_train` to
+                # tell whether the training successfully finished or failed
+                # due to exceptions.
+                self.iter += 1
             except Exception:
                 logger.exception("Exception during training:")
                 raise
@@ -146,22 +157,102 @@ class TrainerBase:
                 self.after_train()
 
     def before_train(self):
+        if self.cfg.OWOD.SKIP_TRAINING_WHILE_EVAL:
+            logger = logging.getLogger(__name__)
+            logger.info('Skipping training as cfg.OWOD.SKIP_TRAINING_WHILE_EVAL flag is set.')
         for h in self._hooks:
             h.before_train()
 
     def after_train(self):
-        for h in self._hooks:
-            h.after_train()
+        self.storage.iter = self.iter
+        if self.cfg.OWOD.COMPUTE_ENERGY:
+            logger = logging.getLogger(__name__)
+            logger.info("Going to analyse the energy files...")
+
+            self.analyse_energy()
+
+            for h in self._hooks:
+                if 'EvalHook' not in str(type(h)):
+                    h.after_train()
+        else:
+            for h in self._hooks:
+                h.after_train()
+
+    def analyse_energy(self, temp=1.5):
+        files = os.listdir(os.path.join(self.cfg.OUTPUT_DIR, self.cfg.OWOD.ENERGY_SAVE_PATH))
+        temp = self.cfg.OWOD.TEMPERATURE
+        logger = logging.getLogger(__name__)
+        logger.info('Temperature value: ' + str(temp))
+        unk = []
+        known = []
+
+        for id, file in enumerate(files):
+            path = os.path.join(self.cfg.OUTPUT_DIR, self.cfg.OWOD.ENERGY_SAVE_PATH, file)
+            try:
+                logits, classes = torch.load(path)
+            except:
+                logger.info('Not able to load ' + path + ". Continuing...")
+                continue
+            num_seen_classes = self.cfg.OWOD.PREV_INTRODUCED_CLS + self.cfg.OWOD.CUR_INTRODUCED_CLS
+            lse = temp * torch.logsumexp(logits[:, :num_seen_classes] / temp, dim=1)
+            # lse = torch.logsumexp(logits[:, :-2], dim=1)
+
+            for i, cls in enumerate(classes):
+                if cls == self.cfg.MODEL.ROI_HEADS.NUM_CLASSES:
+                    continue
+                if cls == self.cfg.MODEL.ROI_HEADS.NUM_CLASSES-1:
+                    unk.append(lse[i].detach().cpu().tolist())
+                else:
+                    known.append(lse[i].detach().cpu().tolist())
+
+            if id % 100 == 0:
+                logger.info("Analysing " + str(id) + " / " + str(len(files)))
+            # if id == 10:
+            #     break
+
+        logger.info('len(unk): ' + str(len(unk)))
+        logger.info('len(known): '+ str(len(known)))
+
+        logger.info('Fitting Weibull distribution...')
+        wb_dist_param = []
+
+        start_time = time.time()
+        wb_unk = Fit_Weibull_3P(failures=unk, show_probability_plot=False, print_results=False)
+        logger.info("--- %s seconds ---" % (time.time() - start_time))
+
+        wb_dist_param.append({"scale_unk": wb_unk.alpha, "shape_unk": wb_unk.beta, "shift_unk": wb_unk.gamma})
+
+        start_time = time.time()
+        wb_known = Fit_Weibull_3P(failures=known, show_probability_plot=False, print_results=False)
+        logger.info("--- %s seconds ---" % (time.time() - start_time))
+
+        wb_dist_param.append(
+            {"scale_known": wb_known.alpha, "shape_known": wb_known.beta, "shift_known": wb_known.gamma})
+
+        param_save_location = os.path.join(self.cfg.OUTPUT_DIR,
+                                           'energy_dist_' + str(self.cfg.OWOD.PREV_INTRODUCED_CLS
+                                                                + self.cfg.OWOD.CUR_INTRODUCED_CLS) + '.pkl')
+        logger.info('Pickling the parameters to ' + param_save_location)
+        torch.save(wb_dist_param, param_save_location)
+
+        logger.info('Plotting the computed energy values...')
+        bins = np.linspace(2, 15, 500)
+        pyplot.hist(known, bins, alpha=0.5, label='known')
+        pyplot.hist(unk, bins, alpha=0.5, label='unk')
+        pyplot.legend(loc='upper right')
+        pyplot.savefig(os.path.join(self.cfg.OUTPUT_DIR, 'energy.png'))
 
     def before_step(self):
+        # Maintain the invariant that storage.iter == trainer.iter
+        # for the entire execution of each step
+        self.storage.iter = self.iter
+
         for h in self._hooks:
             h.before_step()
 
     def after_step(self):
         for h in self._hooks:
             h.after_step()
-        # this guarantees, that in each hook's after_step, storage.iter == trainer.iter
-        self.storage.step()
 
     def run_step(self):
         raise NotImplementedError

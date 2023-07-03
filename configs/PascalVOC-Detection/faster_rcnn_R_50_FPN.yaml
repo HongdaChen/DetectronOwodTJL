@@ -16,3 +16,4 @@ SOLVER:
   STEPS: (12000, 16000)
   MAX_ITER: 18000  # 17.4 epochs
   WARMUP_ITERS: 100
+OUTPUT_DIR: "./output/baseline_pascal_fpn"

@@ -6,6 +6,8 @@ import os
 import xml.etree.ElementTree as ET
 from typing import List, Tuple, Union
 from fvcore.common.file_io import PathManager
+import itertools
+import logging
 
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.structures import BoxMode
@@ -14,13 +16,58 @@ __all__ = ["load_voc_instances", "register_pascal_voc"]
 
 
 # fmt: off
-CLASS_NAMES = (
+# CLASS_NAMES = (
+#     "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
+#     "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
+#     "pottedplant", "sheep", "sofa", "train", "tvmonitor"
+# )
+# CLASS_NAMES = (
+#     "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
+#     "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
+#     "pottedplant", "sheep", "sofa", "train", "tvmonitor", "unknown"
+# )
+# fmt: on
+
+VOC_CLASS_NAMES_COCOFIED = [
+    "airplane",  "dining table", "motorcycle",
+    "potted plant", "couch", "tv"
+]
+
+BASE_VOC_CLASS_NAMES = [
+    "aeroplane", "diningtable", "motorbike",
+    "pottedplant",  "sofa", "tvmonitor"
+]
+
+VOC_CLASS_NAMES = [
     "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
     "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
     "pottedplant", "sheep", "sofa", "train", "tvmonitor"
-)
-# fmt: on
+]
 
+T2_CLASS_NAMES = [
+    "truck", "traffic light", "fire hydrant", "stop sign", "parking meter",
+    "bench", "elephant", "bear", "zebra", "giraffe",
+    "backpack", "umbrella", "handbag", "tie", "suitcase",
+    "microwave", "oven", "toaster", "sink", "refrigerator"
+]
+
+T3_CLASS_NAMES = [
+    "frisbee", "skis", "snowboard", "sports ball", "kite",
+    "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "banana", "apple", "sandwich", "orange", "broccoli",
+    "carrot", "hot dog", "pizza", "donut", "cake"
+]
+
+T4_CLASS_NAMES = [
+    "bed", "toilet", "laptop", "mouse",
+    "remote", "keyboard", "cell phone", "book", "clock",
+    "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
+    "wine glass", "cup", "fork", "knife", "spoon", "bowl"
+]
+
+UNK_CLASS = ["unknown"]
+
+VOC_COCO_CLASS_NAMES = tuple(itertools.chain(VOC_CLASS_NAMES, T2_CLASS_NAMES, T3_CLASS_NAMES, T4_CLASS_NAMES, UNK_CLASS))
 
 def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], Tuple[str, ...]]):
     """
@@ -41,8 +88,13 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
         anno_file = os.path.join(annotation_dirname, fileid + ".xml")
         jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".jpg")
 
-        with PathManager.open(anno_file) as f:
-            tree = ET.parse(f)
+        try:
+            with PathManager.open(anno_file) as f:
+                tree = ET.parse(f)
+        except:
+            logger = logging.getLogger(__name__)
+            logger.info('Not able to load: ' + anno_file + '. Continuing without aboarting...')
+            continue
 
         r = {
             "file_name": jpeg_file,
@@ -54,6 +106,8 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
 
         for obj in tree.findall("object"):
             cls = obj.find("name").text
+            if cls in VOC_CLASS_NAMES_COCOFIED:
+                cls = BASE_VOC_CLASS_NAMES[VOC_CLASS_NAMES_COCOFIED.index(cls)]
             # We include "difficult" samples in training.
             # Based on limited experiments, they don't hurt accuracy.
             # difficult = int(obj.find("difficult").text)
@@ -75,7 +129,12 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
     return dicts
 
 
-def register_pascal_voc(name, dirname, split, year, class_names=CLASS_NAMES):
+def register_pascal_voc(name, dirname, split, year):
+    # if "voc_coco" in name:
+    #     class_names = VOC_COCO_CLASS_NAMES
+    # else:
+    #     class_names = tuple(VOC_CLASS_NAMES)
+    class_names = VOC_COCO_CLASS_NAMES
     DatasetCatalog.register(name, lambda: load_voc_instances(dirname, split, class_names))
     MetadataCatalog.get(name).set(
         thing_classes=list(class_names), dirname=dirname, year=year, split=split

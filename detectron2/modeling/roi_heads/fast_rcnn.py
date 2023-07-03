@@ -2,15 +2,21 @@
 import logging
 from typing import Dict, Union
 import torch
+import os
+import math
+import shortuuid
 from fvcore.nn import giou_loss, smooth_l1_loss
 from torch import nn
 from torch.nn import functional as F
+from torch.distributions.normal import Normal
 
+import detectron2.utils.comm as comm
 from detectron2.config import configurable
 from detectron2.layers import Linear, ShapeSpec, batched_nms, cat, nonzero_tuple
 from detectron2.modeling.box_regression import Box2BoxTransform
 from detectron2.structures import Boxes, Instances
 from detectron2.utils.events import get_event_storage
+from detectron2.utils.store import Store
 
 __all__ = ["fast_rcnn_inference", "FastRCNNOutputLayers"]
 
@@ -43,7 +49,7 @@ Naming convention:
 """
 
 
-def fast_rcnn_inference(boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image):
+def fast_rcnn_inference(boxes, scores, image_shapes, predictions, score_thresh, nms_thresh, topk_per_image):
     """
     Call `fast_rcnn_inference_single_image` for all images.
 
@@ -71,15 +77,15 @@ def fast_rcnn_inference(boxes, scores, image_shapes, score_thresh, nms_thresh, t
     """
     result_per_image = [
         fast_rcnn_inference_single_image(
-            boxes_per_image, scores_per_image, image_shape, score_thresh, nms_thresh, topk_per_image
+            boxes_per_image, scores_per_image, image_shape, score_thresh, nms_thresh, topk_per_image, prediction
         )
-        for scores_per_image, boxes_per_image, image_shape in zip(scores, boxes, image_shapes)
+        for scores_per_image, boxes_per_image, image_shape, prediction in zip(scores, boxes, image_shapes, predictions)
     ]
     return [x[0] for x in result_per_image], [x[1] for x in result_per_image]
 
 
 def fast_rcnn_inference_single_image(
-    boxes, scores, image_shape, score_thresh, nms_thresh, topk_per_image
+    boxes, scores, image_shape, score_thresh, nms_thresh, topk_per_image, prediction
 ):
     """
     Single-image inference. Return bounding-box detection results by thresholding
@@ -92,19 +98,23 @@ def fast_rcnn_inference_single_image(
     Returns:
         Same as `fast_rcnn_inference`, but for only one image.
     """
+    logits = prediction
     valid_mask = torch.isfinite(boxes).all(dim=1) & torch.isfinite(scores).all(dim=1)
     if not valid_mask.all():
         boxes = boxes[valid_mask]
         scores = scores[valid_mask]
+        logits = logits[valid_mask]
 
     scores = scores[:, :-1]
+    logits = logits[:, :-1]
     num_bbox_reg_classes = boxes.shape[1] // 4
     # Convert to Boxes to use the `clip` function ...
     boxes = Boxes(boxes.reshape(-1, 4))
     boxes.clip(image_shape)
     boxes = boxes.tensor.view(-1, num_bbox_reg_classes, 4)  # R x C x 4
 
-    # Filter results based on detection scores
+    # 1. Filter results based on detection scores. It can make NMS more efficient
+    #    by filtering out low-confidence detections.
     filter_mask = scores > score_thresh  # R x K
     # R' x 2. First column contains indices of the R predictions;
     # Second column contains indices of classes.
@@ -114,17 +124,20 @@ def fast_rcnn_inference_single_image(
     else:
         boxes = boxes[filter_mask]
     scores = scores[filter_mask]
+    logits = logits[filter_inds[:,0]]
 
-    # Apply per-class NMS
+    # 2. Apply NMS for each class independently.
     keep = batched_nms(boxes, scores, filter_inds[:, 1], nms_thresh)
     if topk_per_image >= 0:
         keep = keep[:topk_per_image]
     boxes, scores, filter_inds = boxes[keep], scores[keep], filter_inds[keep]
+    logits = logits[keep]
 
     result = Instances(image_shape)
     result.pred_boxes = Boxes(boxes)
     result.scores = scores
     result.pred_classes = filter_inds[:, 1]
+    result.logits = logits
     return result, filter_inds[:, 0]
 
 
@@ -140,6 +153,7 @@ class FastRCNNOutputs:
         pred_class_logits,
         pred_proposal_deltas,
         proposals,
+        invalid_class_range,
         smooth_l1_beta=0.0,
         box_reg_loss_type="smooth_l1",
     ):
@@ -174,6 +188,7 @@ class FastRCNNOutputs:
         self.box_reg_loss_type = box_reg_loss_type
 
         self.image_shapes = [x.image_size for x in proposals]
+        self.invalid_class_range = invalid_class_range
 
         if len(proposals):
             box_type = type(proposals[0].proposal_boxes)
@@ -227,7 +242,14 @@ class FastRCNNOutputs:
             return 0.0 * self.pred_class_logits.sum()
         else:
             self._log_accuracy()
+            self.pred_class_logits[:, self.invalid_class_range] = -10e10
+            # self.log_logits(self.pred_class_logits, self.gt_classes)
             return F.cross_entropy(self.pred_class_logits, self.gt_classes, reduction="mean")
+
+    def log_logits(self, logits, cls):
+        data = (logits, cls)
+        location = '/home/fk1/workspace/OWOD/output/logits/' + shortuuid.uuid() + '.pkl'
+        torch.save(data, location)
 
     def box_reg_loss(self):
         """
@@ -344,12 +366,40 @@ class FastRCNNOutputs:
             boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image
         )
 
+class AE(nn.Module):
+    def __init__(self, input_size, z_dim):
+        super(AE,self).__init__()
+        self.e1 = nn.Linear(input_size,z_dim)
+        self.d1 = nn.Linear(z_dim, input_size)
+
+    def encoder(self, x):
+        z = self.e1(x)
+        z = torch.relu(z)
+        return z
+
+    def decoder(self, z):
+        x = self.d1(z)
+        x = torch.relu(x)
+        return x
+
+    def forward(self, x):
+        z = self.encoder(x)
+        return self.decoder(z)
+
+def Xavier(m):
+    if m.__class__.__name__ == 'Linear':
+        fan_in, fan_out = m.weight.data.size(1), m.weight.data.size(0)
+        std = 1.0 * math.sqrt(2.0 / (fan_in + fan_out))
+        a = math.sqrt(3.0) * std
+        m.weight.data.uniform_(-a, a)
+        m.bias.data.fill_(0.0)
 
 class FastRCNNOutputLayers(nn.Module):
     """
     Two linear layers for predicting Fast R-CNN outputs:
-      (1) proposal-to-detection box regression deltas
-      (2) classification scores
+
+    1. proposal-to-detection box regression deltas
+    2. classification scores
     """
 
     @configurable
@@ -358,6 +408,18 @@ class FastRCNNOutputLayers(nn.Module):
         input_shape: ShapeSpec,
         *,
         box2box_transform,
+        clustering_items_per_class,
+        clustering_start_iter,
+        clustering_update_mu_iter,
+        clustering_momentum,
+        clustering_z_dimension,
+        enable_clustering,
+        prev_intro_cls,
+        curr_intro_cls,
+        max_iterations,
+        output_dir,
+        feat_store_path,
+        margin,
         num_classes: int,
         test_score_thresh: float = 0.0,
         test_nms_thresh: float = 0.5,
@@ -383,8 +445,8 @@ class FastRCNNOutputLayers(nn.Module):
             box_reg_loss_type (str): Box regression loss type. One of: "smooth_l1", "giou"
             loss_weight (float|dict): weights to use for losses. Can be single float for weighting
                 all losses, or a dict of individual weightings. Valid dict keys are:
-                    "loss_cls" - applied to classification loss
-                    "loss_box_reg" - applied to box regression loss
+                    * "loss_cls": applied to classification loss
+                    * "loss_box_reg": applied to box regression loss
         """
         super().__init__()
         if isinstance(input_shape, int):  # some backward compatibility
@@ -411,6 +473,39 @@ class FastRCNNOutputLayers(nn.Module):
             loss_weight = {"loss_cls": loss_weight, "loss_box_reg": loss_weight}
         self.loss_weight = loss_weight
 
+        self.num_classes = num_classes
+        self.clustering_start_iter = clustering_start_iter
+        self.clustering_update_mu_iter = clustering_update_mu_iter
+        self.clustering_momentum = clustering_momentum
+
+        self.hingeloss = nn.HingeEmbeddingLoss(2)
+        self.enable_clustering = enable_clustering
+
+        self.prev_intro_cls = prev_intro_cls
+        self.curr_intro_cls = curr_intro_cls
+        self.seen_classes = self.prev_intro_cls + self.curr_intro_cls
+        self.invalid_class_range = list(range(self.seen_classes, self.num_classes-1))
+        logging.getLogger(__name__).info("Invalid class range: " + str(self.invalid_class_range))
+
+        self.max_iterations = max_iterations
+        self.feature_store_is_stored = False
+        self.output_dir = output_dir
+        self.feat_store_path = feat_store_path
+        self.feature_store_save_loc = os.path.join(self.output_dir, self.feat_store_path, 'feat.pt')
+
+        if os.path.isfile(self.feature_store_save_loc):
+            logging.getLogger(__name__).info('Trying to load feature store from ' + self.feature_store_save_loc)
+            self.feature_store = torch.load(self.feature_store_save_loc)
+        else:
+            logging.getLogger(__name__).info('Feature store not found in ' +
+                                             self.feature_store_save_loc + '. Creating new feature store.')
+            self.feature_store = Store(num_classes + 1, clustering_items_per_class)
+        self.means = [None for _ in range(num_classes + 1)]
+        self.margin = margin
+
+        # self.ae_model = AE(input_size, clustering_z_dimension)
+        # self.ae_model.apply(Xavier)
+
     @classmethod
     def from_config(cls, cfg, input_shape):
         return {
@@ -424,7 +519,19 @@ class FastRCNNOutputLayers(nn.Module):
             "test_nms_thresh"       : cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST,
             "test_topk_per_image"   : cfg.TEST.DETECTIONS_PER_IMAGE,
             "box_reg_loss_type"     : cfg.MODEL.ROI_BOX_HEAD.BBOX_REG_LOSS_TYPE,
-            "loss_weight"           : {"loss_box_reg": cfg.MODEL.ROI_BOX_HEAD.BBOX_REG_LOSS_WEIGHT},
+            "loss_weight"           : {"loss_box_reg": cfg.MODEL.ROI_BOX_HEAD.BBOX_REG_LOSS_WEIGHT, "loss_clustering": 0.1},
+            "clustering_items_per_class" : cfg.OWOD.CLUSTERING.ITEMS_PER_CLASS,
+            "clustering_start_iter" : cfg.OWOD.CLUSTERING.START_ITER,
+            "clustering_update_mu_iter" : cfg.OWOD.CLUSTERING.UPDATE_MU_ITER,
+            "clustering_momentum"   : cfg.OWOD.CLUSTERING.MOMENTUM,
+            "clustering_z_dimension": cfg.OWOD.CLUSTERING.Z_DIMENSION,
+            "enable_clustering"     : cfg.OWOD.ENABLE_CLUSTERING,
+            "prev_intro_cls"        : cfg.OWOD.PREV_INTRODUCED_CLS,
+            "curr_intro_cls"        : cfg.OWOD.CUR_INTRODUCED_CLS,
+            "max_iterations"        : cfg.SOLVER.MAX_ITER,
+            "output_dir"            : cfg.OUTPUT_DIR,
+            "feat_store_path"       : cfg.OWOD.FEATURE_STORE_SAVE_PATH,
+            "margin"                : cfg.OWOD.CLUSTERING.MARGIN,
             # fmt: on
         }
 
@@ -434,10 +541,12 @@ class FastRCNNOutputLayers(nn.Module):
             x: per-region features of shape (N, ...) for N bounding boxes to predict.
 
         Returns:
-            Tensor: shape (N,K+1), scores for each of the N box. Each row contains the scores for
-                K object categories and 1 background class.
-            Tensor: bounding box regression deltas for each box. Shape is shape (N,Kx4), or (N,4)
-                for class-agnostic regression.
+            (Tensor, Tensor):
+            First tensor: shape (N,K+1), scores for each of the N box. Each row contains the
+            scores for K object categories and 1 background class.
+
+            Second tensor: bounding box regression deltas for each box. Shape is shape (N,Kx4),
+            or (N,4) for class-agnostic regression.
         """
         if x.dim() > 2:
             x = torch.flatten(x, start_dim=1)
@@ -445,8 +554,113 @@ class FastRCNNOutputLayers(nn.Module):
         proposal_deltas = self.bbox_pred(x)
         return scores, proposal_deltas
 
+    def update_feature_store(self, features, proposals):
+        # cat(..., dim=0) concatenates over all images in the batch
+        gt_classes = torch.cat([p.gt_classes for p in proposals])
+        self.feature_store.add(features, gt_classes)
+
+        storage = get_event_storage()
+
+        if storage.iter == self.max_iterations-1 and self.feature_store_is_stored is False and comm.is_main_process():
+            logging.getLogger(__name__).info('Saving image store at iteration ' + str(storage.iter) + ' to ' + self.feature_store_save_loc)
+            torch.save(self.feature_store, self.feature_store_save_loc)
+            self.feature_store_is_stored = True
+
+        # self.feature_store.add(F.normalize(features, dim=0), gt_classes)
+        # self.feature_store.add(self.ae_model.encoder(features), gt_classes)
+
+
+    def clstr_loss_l2_cdist(self, input_features, proposals):
+        """
+        Get the foreground input_features, generate distributions for the class,
+        get probability of each feature from each distribution;
+        Compute loss: if belonging to a class -> likelihood should be higher
+                      else -> lower
+        :param input_features:
+        :param proposals:
+        :return:
+        """
+        gt_classes = torch.cat([p.gt_classes for p in proposals])
+        mask = gt_classes != self.num_classes
+        fg_features = input_features[mask]
+        classes = gt_classes[mask]
+        # fg_features = F.normalize(fg_features, dim=0)
+        # fg_features = self.ae_model.encoder(fg_features)
+
+        all_means = self.means
+        for item in all_means:
+            if item != None:
+                length = item.shape
+                break
+
+        for i, item in enumerate(all_means):
+            if item == None:
+                all_means[i] = torch.zeros((length))
+
+        distances = torch.cdist(fg_features, torch.stack(all_means).cuda(), p=self.margin)
+        labels = []
+
+        for index, feature in enumerate(fg_features):
+            for cls_index, mu in enumerate(self.means):
+                if mu is not None and feature is not None:
+                    if  classes[index] ==  cls_index:
+                        labels.append(1)
+                    else:
+                        labels.append(-1)
+                else:
+                    labels.append(0)
+
+        loss = self.hingeloss(distances, torch.tensor(labels).reshape((-1, self.num_classes+1)).cuda())
+
+        return loss
+
+    def get_clustering_loss(self, input_features, proposals):
+        if not self.enable_clustering:
+            return 0
+
+        storage = get_event_storage()
+        c_loss = 0
+        if storage.iter == self.clustering_start_iter:
+            items = self.feature_store.retrieve(-1)
+            for index, item in enumerate(items):
+                if len(item) == 0:
+                    self.means[index] = None
+                else:
+                    mu = torch.tensor(item).mean(dim=0)
+                    self.means[index] = mu
+            c_loss = self.clstr_loss_l2_cdist(input_features, proposals)
+            # Freeze the parameters when clustering starts
+            # for param in self.ae_model.parameters():
+            #     param.requires_grad = False
+        elif storage.iter > self.clustering_start_iter:
+            if storage.iter % self.clustering_update_mu_iter == 0:
+                # Compute new MUs
+                items = self.feature_store.retrieve(-1)
+                new_means = [None for _ in range(self.num_classes + 1)]
+                for index, item in enumerate(items):
+                    if len(item) == 0:
+                        new_means[index] = None
+                    else:
+                        new_means[index] = torch.tensor(item).mean(dim=0)
+                # Update the MUs
+                for i, mean in enumerate(self.means):
+                    if(mean) is not None and new_means[i] is not None:
+                        self.means[i] = self.clustering_momentum * mean + \
+                                        (1 - self.clustering_momentum) * new_means[i]
+
+            c_loss = self.clstr_loss_l2_cdist(input_features, proposals)
+        return c_loss
+
+    # def get_ae_loss(self, input_features):
+    #     # storage = get_event_storage()
+    #     # ae_loss = 0
+    #     # if storage.iter < self.clustering_start_iter :
+    #     features_hat = self.ae_model(input_features)
+    #     ae_loss = F.mse_loss(features_hat, input_features)
+    #     return ae_loss
+
     # TODO: move the implementation to this class.
-    def losses(self, predictions, proposals):
+    def losses(self, predictions, proposals, input_features=None):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -463,9 +677,13 @@ class FastRCNNOutputLayers(nn.Module):
             scores,
             proposal_deltas,
             proposals,
+            self.invalid_class_range,
             self.smooth_l1_beta,
             self.box_reg_loss_type,
         ).losses()
+        if input_features is not None:
+            # losses["loss_cluster_encoder"] = self.get_ae_loss(input_features)
+            losses["loss_clustering"] = self.get_clustering_loss(input_features, proposals)
         return {k: v * self.loss_weight.get(k, 1.0) for k, v in losses.items()}
 
     def inference(self, predictions, proposals):
@@ -486,6 +704,7 @@ class FastRCNNOutputLayers(nn.Module):
             boxes,
             scores,
             image_shapes,
+            predictions,
             self.test_score_thresh,
             self.test_nms_thresh,
             self.test_topk_per_image,
@@ -499,7 +718,8 @@ class FastRCNNOutputLayers(nn.Module):
                 to compute predictions. The fields ``proposal_boxes``, ``gt_classes`` are expected.
 
         Returns:
-            list[Tensor]: A list of Tensors of predicted boxes for GT classes in case of
+            list[Tensor]:
+                A list of Tensors of predicted boxes for GT classes in case of
                 class-specific box head. Element i of the list has shape (Ri, B), where Ri is
                 the number of proposals for image i and B is the box dimension (4 or 5)
         """
@@ -534,7 +754,8 @@ class FastRCNNOutputLayers(nn.Module):
                 used to compute predictions. The ``proposal_boxes`` field is expected.
 
         Returns:
-            list[Tensor]: A list of Tensors of predicted class-specific or class-agnostic boxes
+            list[Tensor]:
+                A list of Tensors of predicted class-specific or class-agnostic boxes
                 for each image. Element i has shape (Ri, K * B) or (Ri, B), where Ri is
                 the number of proposals for image i and B is the box dimension (4 or 5)
         """
@@ -557,10 +778,78 @@ class FastRCNNOutputLayers(nn.Module):
                 used to compute predictions.
 
         Returns:
-            list[Tensor]: A list of Tensors of predicted class probabilities for each image.
+            list[Tensor]:
+                A list of Tensors of predicted class probabilities for each image.
                 Element i has shape (Ri, K + 1), where Ri is the number of proposals for image i.
         """
         scores, _ = predictions
         num_inst_per_image = [len(p) for p in proposals]
         probs = F.softmax(scores, dim=-1)
         return probs.split(num_inst_per_image, dim=0)
+
+    # def clstr_loss(self, input_features, proposals):
+    #     """
+    #     Get the foreground input_features, generate distributions for the class,
+    #     get probability of each feature from each distribution;
+    #     Compute loss: if belonging to a class -> likelihood should be higher
+    #                   else -> lower
+    #     :param input_features:
+    #     :param proposals:
+    #     :return:
+    #     """
+    #     loss = 0
+    #     gt_classes = torch.cat([p.gt_classes for p in proposals])
+    #     mask = gt_classes != self.num_classes
+    #     fg_features = input_features[mask]
+    #     classes = gt_classes[mask]
+    #     # fg_features = self.ae_model.encoder(fg_features)
+    #
+    #     # Distribution per class
+    #     log_prob = [None for _ in range(self.num_classes + 1)]
+    #     # https://github.com/pytorch/pytorch/issues/23780
+    #     for cls_index, mu in enumerate(self.means):
+    #         if mu is not None:
+    #             dist = Normal(loc=mu.cuda(), scale=torch.ones_like(mu.cuda()))
+    #             log_prob[cls_index] = dist.log_prob(fg_features).mean(dim=1)
+    #             # log_prob[cls_index] = torch.distributions.multivariate_normal. \
+    #             #     MultivariateNormal(mu.cuda(), torch.eye(len(mu)).cuda()).log_prob(fg_features)
+    #                 # MultivariateNormal(mu, torch.eye(len(mu))).log_prob(fg_features.cpu())
+    #             #                     MultivariateNormal(mu[:2], torch.eye(len(mu[:2]))).log_prob(fg_features[:,:2].cpu())
+    #         else:
+    #             log_prob[cls_index] = torch.zeros((len(fg_features))).cuda()
+    #
+    #     log_prob = torch.stack(log_prob).T # num_of_fg_proposals x num_of_classes
+    #     for i, p in enumerate(log_prob):
+    #         weight = torch.ones_like(p) * -1
+    #         weight[classes[i]] = 1
+    #         p = p * weight
+    #         loss += p.mean()
+    #     return loss
+
+    # def clstr_loss_l2(self, input_features, proposals):
+    #     """
+    #     Get the foreground input_features, generate distributions for the class,
+    #     get probability of each feature from each distribution;
+    #     Compute loss: if belonging to a class -> likelihood should be higher
+    #                   else -> lower
+    #     :param input_features:
+    #     :param proposals:
+    #     :return:
+    #     """
+    #     loss = 0
+    #     gt_classes = torch.cat([p.gt_classes for p in proposals])
+    #     mask = gt_classes != self.num_classes
+    #     fg_features = input_features[mask]
+    #     classes = gt_classes[mask]
+    #     fg_features = self.ae_model.encoder(fg_features)
+    #
+    #     for index, feature in enumerate(fg_features):
+    #         for cls_index, mu in enumerate(self.means):
+    #             if mu is not None and feature is not None:
+    #                 mu = mu.cuda()
+    #                 if  classes[index] ==  cls_index:
+    #                     loss -= F.mse_loss(feature, mu)
+    #                 else:
+    #                     loss += F.mse_loss(feature, mu)
+    #
+    #     return loss

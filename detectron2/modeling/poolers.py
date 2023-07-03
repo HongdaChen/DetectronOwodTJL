@@ -1,6 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import math
-import sys
 from typing import List
 import torch
 from torch import nn
@@ -219,6 +218,10 @@ class ROIPooler(nn.Module):
         ), "unequal value, x[0] batch dim 0 is {}, but box_list has length {}".format(
             x[0].size(0), len(box_lists)
         )
+        if len(box_lists) == 0:
+            return torch.zeros(
+                (0, x[0].shape[1]) + self.output_size, device=x[0].device, dtype=x[0].dtype
+            )
 
         pooler_fmt_boxes = convert_boxes_to_pooler_format(box_lists)
 

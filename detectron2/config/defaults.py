@@ -57,6 +57,9 @@ _C.INPUT.MAX_SIZE_TRAIN = 1333
 _C.INPUT.MIN_SIZE_TEST = 800
 # Maximum size of the side of the image during testing
 _C.INPUT.MAX_SIZE_TEST = 1333
+# Mode for flipping images used in data augmentation during training
+# choose one of ["horizontal, "vertical", "none"]
+_C.INPUT.RANDOM_FLIP = "horizontal"
 
 # `True` if cropping is used for data augmentation during training
 _C.INPUT.CROP = CN({"ENABLED": False})
@@ -212,7 +215,7 @@ _C.MODEL.RPN.BOUNDARY_THRESH = -1
 # are ignored (-1)
 _C.MODEL.RPN.IOU_THRESHOLDS = [0.3, 0.7]
 _C.MODEL.RPN.IOU_LABELS = [0, -1, 1]
-# Total number of RPN examples per image
+# Number of regions per image used to train RPN
 _C.MODEL.RPN.BATCH_SIZE_PER_IMAGE = 256
 # Target fraction of foreground (positive) examples per RPN minibatch
 _C.MODEL.RPN.POSITIVE_FRACTION = 0.5
@@ -439,6 +442,7 @@ _C.MODEL.RETINANET.PRIOR_PROB = 0.01
 # Inference cls score threshold, only anchors with score > INFERENCE_TH are
 # considered for inference (to improve speed)
 _C.MODEL.RETINANET.SCORE_THRESH_TEST = 0.05
+# Select topk candidates before NMS
 _C.MODEL.RETINANET.TOPK_CANDIDATES_TEST = 1000
 _C.MODEL.RETINANET.NMS_THRESH_TEST = 0.5
 
@@ -449,6 +453,12 @@ _C.MODEL.RETINANET.BBOX_REG_WEIGHTS = (1.0, 1.0, 1.0, 1.0)
 _C.MODEL.RETINANET.FOCAL_LOSS_GAMMA = 2.0
 _C.MODEL.RETINANET.FOCAL_LOSS_ALPHA = 0.25
 _C.MODEL.RETINANET.SMOOTH_L1_LOSS_BETA = 0.1
+# Options are: "smooth_l1", "giou"
+_C.MODEL.RETINANET.BBOX_REG_LOSS_TYPE = "smooth_l1"
+
+# One of BN, SyncBN, FrozenBN, GN
+# Only supports GN until unshared norm is implemented
+_C.MODEL.RETINANET.NORM = ""
 
 
 # ---------------------------------------------------------------------------- #
@@ -584,6 +594,32 @@ _C.TEST.AUG.FLIP = True
 
 _C.TEST.PRECISE_BN = CN({"ENABLED": False})
 _C.TEST.PRECISE_BN.NUM_ITER = 200
+
+# ---------------------------------------------------------------------------- #
+# OpenWorld Object Detection
+# ---------------------------------------------------------------------------- #
+_C.OWOD = CN()
+_C.OWOD.ENABLE_THRESHOLD_AUTOLABEL_UNK = False
+_C.OWOD.NUM_UNK_PER_IMAGE = 1
+_C.OWOD.ENABLE_UNCERTAINITY_AUTOLABEL_UNK = False
+_C.OWOD.ENABLE_CLUSTERING = False
+
+_C.OWOD.CLUSTERING = CN()
+_C.OWOD.CLUSTERING.ITEMS_PER_CLASS = 10
+_C.OWOD.CLUSTERING.START_ITER = 100
+_C.OWOD.CLUSTERING.UPDATE_MU_ITER = 200
+_C.OWOD.CLUSTERING.MOMENTUM = 0.9
+_C.OWOD.CLUSTERING.Z_DIMENSION = 64
+_C.OWOD.CLUSTERING.MARGIN = 10.0
+
+_C.OWOD.PREV_INTRODUCED_CLS = 0
+_C.OWOD.CUR_INTRODUCED_CLS = 20
+_C.OWOD.COMPUTE_ENERGY = False
+_C.OWOD.ENERGY_SAVE_PATH = ''
+_C.OWOD.SKIP_TRAINING_WHILE_EVAL = False
+_C.OWOD.FEATURE_STORE_SAVE_PATH = ''
+_C.OWOD.TEMPERATURE = 1.5
+
 
 # ---------------------------------------------------------------------------- #
 # Misc options
