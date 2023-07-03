@@ -47,16 +47,16 @@ def update_label_based_on_energy(logits, classes, unk_dist, known_dist):
     return cls
 
 # Get image
-fnum = '348006'
-file_name = '000000' + fnum
-im = cv2.imread("/home/fk1/workspace/OWOD/datasets/VOC2007/JPEGImages/" + file_name + ".jpg")
+file_name = '04816'
+im = cv2.imread("/home/tangjl/OWOD/datasets/VOC2007/JPEGImages/" + file_name + ".jpg")
 # model = '/home/fk1/workspace/OWOD/output/old/t1_20_class/model_0009999.pth'
 # model = '/home/fk1/workspace/OWOD/output/t1_THRESHOLD_AUTOLABEL_UNK/model_final.pth'
 # model = '/home/fk1/workspace/OWOD/output/t1_clustering_with_save/model_final.pth'
 # model = '/home/fk1/workspace/OWOD/output/t2_ft/model_final.pth'
 # model = '/home/fk1/workspace/OWOD/output/t3_ft/model_final.pth'
-model = '/home/fk1/workspace/OWOD/output/t4_ft/model_final.pth'
-cfg_file = '/home/fk1/workspace/OWOD/configs/OWOD/t1/t1_test.yaml'
+#model = '/home/fk1/workspace/OWOD/output/t4_ft/model_final.pth'
+model = '/home/tangjl/OWOD/output/t1/model_final.pth'
+cfg_file = '/home/tangjl/OWOD/configs/OWOD/t1/t1_test.yaml'
 
 
 # Get the configuration ready
@@ -77,7 +77,7 @@ outputs = predictor(im)
 
 print('Before' + str(outputs["instances"].pred_classes))
 
-param_save_location = os.path.join('/home/fk1/workspace/OWOD/output/t1_clustering_val/energy_dist_' + str(20) + '.pkl')
+param_save_location = os.path.join('/home/tangjl/OWOD/output/t1_final/energy_dist_15_.pkl')
 params = torch.load(param_save_location)
 unknown = params[0]
 known = params[1]

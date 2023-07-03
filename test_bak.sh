@@ -1,0 +1,3 @@
+CUDA_VISIBLE_DEVICES=0,1 python tools/train_net.py --num-gpus 2 --config-file ./configs/OWOD/t1/t1_val.yaml SOLVER.IMS_PER_BATCH 4 SOLVER.BASE_LR 0.001 OWOD.TEMPERATURE 2.0 OUTPUT_DIR "./output/t1_final" MODEL.WEIGHTS "/home/tjl/OWOD/output/t1/model_final.pth" 
+
+CUDA_VISIBLE_DEVICES=0,1 python tools/train_net.py --num-gpus 2 --eval-only --config-file ./configs/OWOD/t1/t1_test.yaml SOLVER.IMS_PER_BATCH 4 SOLVER.BASE_LR 0.0005 OUTPUT_DIR "./output/t1_final" MODEL.WEIGHTS "/home/tjl/OWOD/output/t1/model_final.pth"

@@ -28,41 +28,34 @@ __all__ = ["load_voc_instances", "register_pascal_voc"]
 # )
 # fmt: on
 
+#DIOR
 VOC_CLASS_NAMES_COCOFIED = [
-    "airplane",  "dining table", "motorcycle",
-    "potted plant", "couch", "tv"
+    "baseballfield",  "storagetank", "tenniscourt",
+    "basketballcourt", "groundtrackfield"
 ]
 
+#HRRSD
 BASE_VOC_CLASS_NAMES = [
-    "aeroplane", "diningtable", "motorbike",
-    "pottedplant",  "sofa", "tvmonitor"
+    "baseball diamond", "storage tank", "tennis court",
+    "basketball court",  "ground track field"
 ]
 
+#VOC=HRRSD
 VOC_CLASS_NAMES = [
-    "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
-    "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
-    "pottedplant", "sheep", "sofa", "train", "tvmonitor"
+  "airplane","ship","storage tank","baseball diamond","tennis court","basketball court",
+    "ground track field", "harbor", "bridge", "vehicle"
 ]
 
 T2_CLASS_NAMES = [
-    "truck", "traffic light", "fire hydrant", "stop sign", "parking meter",
-    "bench", "elephant", "bear", "zebra", "giraffe",
-    "backpack", "umbrella", "handbag", "tie", "suitcase",
-    "microwave", "oven", "toaster", "sink", "refrigerator"
+  "golffield","airport","chimney","dam","crossroad"
 ]
 
 T3_CLASS_NAMES = [
-    "frisbee", "skis", "snowboard", "sports ball", "kite",
-    "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
-    "banana", "apple", "sandwich", "orange", "broccoli",
-    "carrot", "hot dog", "pizza", "donut", "cake"
+    "Expressway-Service-area","Expressway-toll-station",  "overpass" ,  "parking lot"
 ]
 
 T4_CLASS_NAMES = [
-    "bed", "toilet", "laptop", "mouse",
-    "remote", "keyboard", "cell phone", "book", "clock",
-    "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
-    "wine glass", "cup", "fork", "knife", "spoon", "bowl"
+    "windmill", "trainstation", "stadium" ,  "T junction"
 ]
 
 UNK_CLASS = ["unknown"]
@@ -80,7 +73,7 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
     """
     with PathManager.open(os.path.join(dirname, "ImageSets", "Main", split + ".txt")) as f:
         fileids = np.loadtxt(f, dtype=np.str)
-
+    print("............."+split+"...................")
     # Needs to read many small annotation files. Makes sense at local
     annotation_dirname = PathManager.get_local_path(os.path.join(dirname, "Annotations/"))
     dicts = []
@@ -108,6 +101,7 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
             cls = obj.find("name").text
             if cls in VOC_CLASS_NAMES_COCOFIED:
                 cls = BASE_VOC_CLASS_NAMES[VOC_CLASS_NAMES_COCOFIED.index(cls)]
+            #print(cls)
             # We include "difficult" samples in training.
             # Based on limited experiments, they don't hurt accuracy.
             # difficult = int(obj.find("difficult").text)
@@ -135,6 +129,8 @@ def register_pascal_voc(name, dirname, split, year):
     # else:
     #     class_names = tuple(VOC_CLASS_NAMES)
     class_names = VOC_COCO_CLASS_NAMES
+    #class_names = tuple(itertools.chain(VOC_CLASS_NAMES,UNK_CLASS))
+    #print(class_names)
     DatasetCatalog.register(name, lambda: load_voc_instances(dirname, split, class_names))
     MetadataCatalog.get(name).set(
         thing_classes=list(class_names), dirname=dirname, year=year, split=split

@@ -248,7 +248,7 @@ class FastRCNNOutputs:
 
     def log_logits(self, logits, cls):
         data = (logits, cls)
-        location = '/home/fk1/workspace/OWOD/output/logits/' + shortuuid.uuid() + '.pkl'
+        location = '/home/tangjl/OWOD/output/logits/' + shortuuid.uuid() + '.pkl'
         torch.save(data, location)
 
     def box_reg_loss(self):
@@ -586,13 +586,14 @@ class FastRCNNOutputLayers(nn.Module):
         classes = gt_classes[mask]
         # fg_features = F.normalize(fg_features, dim=0)
         # fg_features = self.ae_model.encoder(fg_features)
-
         all_means = self.means
         for item in all_means:
             if item != None:
                 length = item.shape
+                #print(length)
                 break
-
+            length = 2048
+            
         for i, item in enumerate(all_means):
             if item == None:
                 all_means[i] = torch.zeros((length))

@@ -14,7 +14,7 @@ from detectron2.utils.logger import setup_logger
 from predictor import VisualizationDemo
 
 # constants
-WINDOW_NAME = "COCO detections"
+WINDOW_NAME = "detections"
 
 
 def setup_cfg(args):
@@ -46,11 +46,13 @@ def get_parser():
     parser.add_argument(
         "--input",
         nargs="+",
+        #default="/home/tjl/OWOD/demo/output/image/*.jpg",
         help="A list of space separated input images; "
         "or a single glob pattern such as 'directory/*.jpg'",
     )
     parser.add_argument(
         "--output",
+        #default="/home/tjl/OWOD/demo/output",
         help="A file or directory to save output visualizations. "
         "If not given, will show output in an OpenCV window.",
     )

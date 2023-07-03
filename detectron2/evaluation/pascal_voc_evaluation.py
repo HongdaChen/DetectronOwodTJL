@@ -72,9 +72,9 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
 
 
     def create_distribution(self, scale, shape, shift):
-        wd = Weibull(scale=scale, concentration=shape)
+        wd = Weibull(scale=scale, concentration=shape,validate_args=False)
         transforms = AffineTransform(loc=shift, scale=1.)
-        weibull = TransformedDistribution(wd, transforms)
+        weibull = TransformedDistribution(wd, transforms,validate_args=False)
         return weibull
 
     def compute_prob(self, x, distribution):
@@ -322,13 +322,14 @@ class PascalVOCDetectionEvaluator(DatasetEvaluator):
 def parse_rec(filename, known_classes):
     """Parse a PASCAL VOC xml file."""
     VOC_CLASS_NAMES_COCOFIED = [
-        "airplane", "dining table", "motorcycle",
-        "potted plant", "couch", "tv"
+        "baseballfield",  "storagetank", "tenniscourt",
+    "basketballcourt", "groundtrackfield"
     ]
     BASE_VOC_CLASS_NAMES = [
-        "aeroplane", "diningtable", "motorbike",
-        "pottedplant", "sofa", "tvmonitor"
+        "baseball diamond", "storage tank", "tennis court",
+    "basketball court",  "ground track field"
     ]
+    print(known_classes)
     try:
         with PathManager.open(filename) as f:
             tree = ET.parse(f)
@@ -592,7 +593,7 @@ def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_me
     return rec, prec, ap, is_unk_sum, n_unk, tp_plus_fp_closed_set, fp_open_set
 
 
-def plot_pr_curve(precision, recall, filename, base_path='/home/fk1/workspace/OWOD/output/plots/'):
+def plot_pr_curve(precision, recall, filename, base_path='/home/tangjl/OWOD/output/plots/'):
     fig, ax = plt.subplots()
     ax.step(recall, precision, color='r', alpha=0.99, where='post')
     ax.fill_between(recall, precision, alpha=0.2, color='b', step='post')

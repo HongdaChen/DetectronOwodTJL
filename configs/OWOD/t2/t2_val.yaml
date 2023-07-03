@@ -1,6 +1,8 @@
 _BASE_: "../../Base-RCNN-C4-OWOD.yaml"
 MODEL:
-  WEIGHTS: "/home/joseph/workspace/OWOD/output/t2_ft/model_final.pth"
+  WEIGHTS: "/home/tjl/OWOD/output/t2_ft/model_final.pth"
+  ROI_HEADS:
+    NUM_CLASSES : 24
 DATASETS:
   TRAIN: ('voc_coco_2007_val', ) # t1_voc_coco_2007_train, t1_voc_coco_2007_ft
   TEST: ('voc_coco_2007_val', )
@@ -10,8 +12,8 @@ SOLVER:
   WARMUP_ITERS: 0
 OUTPUT_DIR: "./output/t2_val"
 OWOD:
-  PREV_INTRODUCED_CLS: 20
-  CUR_INTRODUCED_CLS: 20
+  PREV_INTRODUCED_CLS: 10
+  CUR_INTRODUCED_CLS: 5
   ENABLE_CLUSTERING: False
   COMPUTE_ENERGY: True
   ENERGY_SAVE_PATH: 'energy'

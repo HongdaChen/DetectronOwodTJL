@@ -72,6 +72,7 @@ def convert_PIL_to_numpy(image, format):
         conversion_format = format
         if format in ["BGR", "YUV-BT.601"]:
             conversion_format = "RGB"
+        #print(image)
         image = image.convert(conversion_format)
     image = np.asarray(image)
     # PIL squeezes out the channel dimension for "L", so make it HWC
@@ -189,17 +190,17 @@ def check_image_size(dataset_dict, image):
     """
     if "width" in dataset_dict or "height" in dataset_dict:
         image_wh = (image.shape[1], image.shape[0])
-        expected_wh = (dataset_dict["width"], dataset_dict["height"])
-        if not image_wh == expected_wh:
-            raise SizeMismatchError(
-                "Mismatched (W,H){}, got {}, expect {}".format(
-                    " for image " + dataset_dict["file_name"]
-                    if "file_name" in dataset_dict
-                    else "",
-                    image_wh,
-                    expected_wh,
-                )
-            )
+        #expected_wh = (dataset_dict["width"], dataset_dict["height"])
+        #if not image_wh == expected_wh:
+        #    raise SizeMismatchError(
+        #        "Mismatched (W,H){}, got {}, expect {}".format(
+        #            " for image " + dataset_dict["file_name"]
+        #            if "file_name" in dataset_dict
+         #           else "",
+        #            image_wh,
+         #           expected_wh,
+         #       )
+        #    )
 
     # To ensure bbox always remap to original image size
     if "width" not in dataset_dict:

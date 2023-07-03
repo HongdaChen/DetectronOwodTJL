@@ -1,0 +1,22 @@
+_BASE_: "/home/tjl/OWOD/configs/PascalVOC-Detection/faster_rcnn_R_50_C4.yaml"
+MODEL:
+  WEIGHTS: "/home/tjl/OWOD/output/t3/model_final.pth"
+  ROI_HEADS:
+    NUM_CLASSES : 24
+DATASETS:
+  TRAIN: ('t3_voc_coco_2007_train', )
+  TEST: ('voc_coco_2007_test', )
+SOLVER:
+  STEPS: (110000, 112000)
+  MAX_ITER: 114000
+  WARMUP_ITERS: 0
+OUTPUT_DIR: "./output/t3"
+OWOD:
+  PREV_INTRODUCED_CLS: 15
+  CUR_INTRODUCED_CLS: 4
+  ENABLE_THRESHOLD_AUTOLABEL_UNK: False
+  ENABLE_CLUSTERING: False
+  CLUSTERING:
+    START_ITER: 74000
+    
+    

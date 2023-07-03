@@ -1,0 +1,16 @@
+_BASE_: "/home/tjl/OWOD/configs/PascalVOC-Detection/faster_rcnn_R_50_C4.yaml"
+MODEL:
+  WEIGHTS: "/home/tjl/OWOD/output/t4_ft/model_final.pth"
+  ROI_HEADS:
+    NUM_CLASSES : 24
+    NMS_THRESH_TEST: 0.4
+TEST:
+  DETECTIONS_PER_IMAGE: 100
+DATASETS:
+  TRAIN: ('t4_voc_coco_2007_train', )
+  TEST: ('voc_coco_2007_test', )
+OUTPUT_DIR: "./output/t4_evalulate"
+OWOD:
+  PREV_INTRODUCED_CLS: 19
+  CUR_INTRODUCED_CLS: 4
+  COMPUTE_ENERGY: False
